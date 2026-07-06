@@ -1350,3 +1350,86 @@ def test_typed_field_access_on_message_tool_calls():
     assert msg.tool_calls[0].id == "call_abc"
     assert msg.tool_calls[0].function.name == "get_weather"
     assert msg.tool_calls[0].function.arguments == '{"city": "SF"}'
+
+
+# -----------------------------------------------------------------------------
+# reasoning_content (Fireworks/Together separate-field format)
+# -----------------------------------------------------------------------------
+
+
+def test_message_reasoning_content_field():
+    """reasoning_content is preserved alongside content."""
+    msg = Message(role=Role.ASSISTANT, content="answer", reasoning_content="thought")
+    assert msg.reasoning_content == "thought"
+    assert msg.content == "answer"
+
+
+def test_message_reasoning_content_defaults_to_none():
+    """reasoning_content defaults to None when unset."""
+    msg = Message(role=Role.ASSISTANT, content="answer")
+    assert msg.reasoning_content is None
+
+
+def test_message_reasoning_content_round_trips_through_dict():
+    """reasoning_content survives a model_dump / re-construct cycle."""
+    msg = Message(role=Role.ASSISTANT, content="answer", reasoning_content="thought")
+    restored = Message(**msg.model_dump(mode="json", exclude_none=True))
+    assert restored.reasoning_content == "thought"
+
+
+def test_message_with_only_reasoning_content_is_invalid():
+    """Validator still requires content or tool_calls; reasoning alone isn't enough."""
+    with pytest.raises(ValueError, match="at least one of `content`"):
+        Message(role=Role.ASSISTANT, reasoning_content="thought")
+
+
+def test_conversation_to_dict_excludes_none_reasoning_content():
+    """to_dict() omits reasoning_content when None (exclude_none semantics)."""
+    conv = Conversation(messages=[Message(role=Role.USER, content="hi")])
+    d = conv.to_dict()
+    assert "reasoning_content" not in d["messages"][0]
+
+
+def test_conversation_to_dict_includes_set_reasoning_content():
+    """to_dict() includes reasoning_content when present."""
+    conv = Conversation(
+        messages=[
+            Message(
+                role=Role.ASSISTANT,
+                content="answer",
+                reasoning_content="thought",
+            )
+        ]
+    )
+    d = conv.to_dict()
+    assert d["messages"][0]["reasoning_content"] == "thought"
+
+
+def test_message_get_dict_accessor():
+    """Message.get() emulates the dict accessor used by chat templates."""
+    message = Message(role=Role.USER, content="hello")
+    assert message.get("content") == "hello"
+    assert message.get("role") == Role.USER
+    assert message.get("tool_calls") is None
+    assert message.get("reasoning_content") is None
+    assert message.get("nonexistent_key") is None
+    assert message.get("nonexistent_key", "default") == "default"
+    # Keys that collide with method/attribute names return the default, not the
+    # bound method — get exposes declared fields only.
+    assert message.get("get") is None
+    assert message.get("model_dump", "x") == "x"
+
+
+def test_message_get_supports_gemma4_chat_template_pattern():
+    """Regression for OPE-1861: Gemma 4's chat template reads message fields via
+    ``.get()``, so Message must support that access pattern."""
+    message = Message(
+        role=Role.ASSISTANT,
+        content="answer",
+        reasoning_content="because",
+    )
+    # `reasoning` is not a field; the template falls through to `reasoning_content`.
+    assert (message.get("reasoning") or message.get("reasoning_content")) == "because"
+    # The template guards optional sections on these keys.
+    assert message.get("tool_calls") is None
+    assert message.get("tool_responses") is None

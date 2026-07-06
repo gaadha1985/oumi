@@ -1079,7 +1079,6 @@ def _grounding_attr(
 
 
 def test_make_grounding_rng_unseeded_returns_fresh_random(mock_inference_config):
-
     synth = _make_synthesizer(mock_inference_config)
     rng = synth._make_grounding_rng(seed=None, sample_index=0)
     assert isinstance(rng, random.Random)
@@ -1128,6 +1127,7 @@ def test_attach_grounding_facts_populates_samples(mock_inference_config):
     env_config = _grounded_env_config(n_entries=10, sample_size=3, seed=42)
     synth = _make_synthesizer(mock_inference_config, environment_config=env_config)
     samples = [{}, {}, {}]
+    synth._prepare_sample_routers(len(samples))
     synth._attach_grounding_facts(
         samples,
         _grounding_attr(available_envs=["env1"], available_tools=["lookup"]),
@@ -1151,6 +1151,8 @@ def test_attach_grounding_facts_seeded_is_reproducible(mock_inference_config):
     samples_a = [{}, {}, {}]
     samples_b = [{}, {}, {}]
     attr = _grounding_attr(available_envs=["env1"], available_tools=["lookup"])
+    synth_a._prepare_sample_routers(len(samples_a))
+    synth_b._prepare_sample_routers(len(samples_b))
     synth_a._attach_grounding_facts(samples_a, attr)
     synth_b._attach_grounding_facts(samples_b, attr)
     for a, b in zip(samples_a, samples_b):
@@ -1163,6 +1165,7 @@ def test_attach_grounding_facts_seeded_different_samples_differ(mock_inference_c
     env_config = _grounded_env_config(n_entries=50, sample_size=3, seed=7)
     synth = _make_synthesizer(mock_inference_config, environment_config=env_config)
     samples = [{}, {}]
+    synth._prepare_sample_routers(len(samples))
     synth._attach_grounding_facts(
         samples,
         _grounding_attr(available_envs=["env1"], available_tools=["lookup"]),
@@ -1186,6 +1189,7 @@ def test_attach_grounding_facts_respects_available_environments_scoping(
     env_config = EnvironmentConfig(environments=[env_a, env_b])
     synth = _make_synthesizer(mock_inference_config, environment_config=env_config)
     samples = [{}]
+    synth._prepare_sample_routers(len(samples))
     synth._attach_grounding_facts(
         samples,
         _grounding_attr(available_envs=["env_a"], available_tools=["tool_a"]),
@@ -1240,6 +1244,7 @@ def test_attach_grounding_facts_filters_by_available_tools(mock_inference_config
     )
     synth = _make_synthesizer(mock_inference_config, environment_config=env_config)
     samples = [{}, {}]
+    synth._prepare_sample_routers(len(samples))
     synth._attach_grounding_facts(samples, multiturn)
     for sample in samples:
         facts = sample["grounding_facts"]
@@ -1261,6 +1266,7 @@ def test_attach_grounding_facts_concatenates_across_multiple_envs(
     env_config = EnvironmentConfig(environments=[env_a, env_b])
     synth = _make_synthesizer(mock_inference_config, environment_config=env_config)
     samples = [{}]
+    synth._prepare_sample_routers(len(samples))
     synth._attach_grounding_facts(
         samples, _grounding_attr(available_tools=["tool_a", "tool_b"])
     )
@@ -1270,10 +1276,10 @@ def test_attach_grounding_facts_concatenates_across_multiple_envs(
 def test_attach_grounding_facts_truncation_emits_logger_warning(
     mock_inference_config, caplog
 ):
-
     env_config = _grounded_env_config(n_entries=2, sample_size=5, seed=1)
     synth = _make_synthesizer(mock_inference_config, environment_config=env_config)
     samples = [{}, {}]
+    synth._prepare_sample_routers(len(samples))
     with caplog.at_level(logging.WARNING, logger="oumi"):
         synth._attach_grounding_facts(
             samples,
@@ -1451,7 +1457,6 @@ def test_synthesize_invokes_attach_grounding_facts(
 def test_warn_on_grounding_placeholder_warns_in_user_persona(
     mock_inference_config, caplog
 ):
-
     synth = _make_synthesizer(mock_inference_config)
     attr = MultiTurnAttribute(
         id="t",
@@ -1472,7 +1477,6 @@ def test_warn_on_grounding_placeholder_warns_in_user_persona(
 def test_warn_on_grounding_placeholder_warns_in_assistant_persona(
     mock_inference_config, caplog
 ):
-
     synth = _make_synthesizer(mock_inference_config)
     attr = MultiTurnAttribute(
         id="t",
@@ -1493,7 +1497,6 @@ def test_warn_on_grounding_placeholder_warns_in_assistant_persona(
 def test_warn_on_grounding_placeholder_no_warning_when_placeholder_absent(
     mock_inference_config, caplog
 ):
-
     synth = _make_synthesizer(mock_inference_config)
     attr = MultiTurnAttribute(
         id="t",
@@ -1542,7 +1545,7 @@ def test_init_raises_on_unsupported_engine_with_tools(
         )
 
 
-@patch("oumi.core.synthesis.conversation_synthesizer.build_environment")
+@patch("oumi.core.synthesis.tool_router.build_environment")
 @patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
 def test_init_no_error_on_supported_engine_with_tools(
     mock_build_inference_engine,
@@ -1593,7 +1596,7 @@ def test_init_no_error_on_unsupported_engine_without_tools(
     )
 
 
-@patch("oumi.core.synthesis.conversation_synthesizer.build_environment")
+@patch("oumi.core.synthesis.tool_router.build_environment")
 @patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
 def test_synthesize_attaches_tools_to_assistant_prompt(
     mock_build_inference_engine,
@@ -1736,18 +1739,18 @@ def _make_env_config(env_id: str, tool_id: str) -> MagicMock:
     return env_config
 
 
-@patch("oumi.core.synthesis.conversation_synthesizer.build_environment")
+@patch("oumi.core.synthesis.tool_router.build_environment")
 @patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
-def test_run_tool_call_dispatches_through_env(
+def test_dispatch_tool_calls_routes_through_env(
     mock_build_inference_engine,
     mock_build_environment,
     mock_general_synthesis_params,
 ):
-    """A valid ToolCall produces a Role.TOOL message via env.step()."""
+    """A valid ToolCall produces a Role.TOOL message via batched env.step()."""
     mock_build_inference_engine.return_value = Mock()
 
     fake_env = Mock(spec=BaseEnvironment)
-    fake_env.step.return_value = ToolResult(output={"city": "Paris"})
+    fake_env.step.return_value = [ToolResult(output={"city": "Paris"})]
     mock_build_environment.return_value = fake_env
 
     env_config = _make_env_config("weather", "get_weather")
@@ -1769,17 +1772,62 @@ def test_run_tool_call_dispatches_through_env(
         id="call_1",
         function=FunctionCall(name="get_weather", arguments='{"city": "Paris"}'),
     )
-    msg = synth._run_tool_call(tc)
+    synth._prepare_sample_routers(1)
+    [msg] = synth._dispatch_tool_calls([tc], 0)
 
     assert msg.role == Role.TOOL
     assert msg.tool_call_id == "call_1"
     assert msg.content == '{"city": "Paris"}'
-    fake_env.step.assert_called_once_with("get_weather", {"city": "Paris"})
+    fake_env.step.assert_called_once_with([("get_weather", {"city": "Paris"})])
 
 
-@patch("oumi.core.synthesis.conversation_synthesizer.build_environment")
+@patch("oumi.core.synthesis.tool_router.build_environment")
 @patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
-def test_run_tool_call_handles_malformed_arguments(
+def test_dispatch_tool_calls_folds_same_env_calls_into_one_step(
+    mock_build_inference_engine,
+    mock_build_environment,
+    mock_general_synthesis_params,
+):
+    """Multiple calls to the same env collapse into one batched step()."""
+    mock_build_inference_engine.return_value = Mock()
+
+    fake_env = Mock(spec=BaseEnvironment)
+    fake_env.step.return_value = [
+        ToolResult(output={"i": 0}),
+        ToolResult(output={"i": 1}),
+        ToolResult(output={"i": 2}),
+    ]
+    mock_build_environment.return_value = fake_env
+
+    env_config = _make_env_config("e", "t")
+    inference_config = InferenceConfig(
+        engine=InferenceEngineType.OPENAI,
+        model=Mock(spec=ModelParams),
+        remote_params=Mock(spec=RemoteParams),
+        generation=GenerationParams(),
+    )
+    synth = ConversationSynthesizer(
+        mock_general_synthesis_params,
+        inference_config,
+        environment_config=env_config,
+    )
+
+    tcs = [
+        ToolCall(id=f"c{i}", function=FunctionCall(name="t", arguments=f'{{"i": {i}}}'))
+        for i in range(3)
+    ]
+    synth._prepare_sample_routers(1)
+    msgs = synth._dispatch_tool_calls(tcs, 0)
+    assert [m.tool_call_id for m in msgs] == ["c0", "c1", "c2"]
+    assert [m.content for m in msgs] == ['{"i": 0}', '{"i": 1}', '{"i": 2}']
+    fake_env.step.assert_called_once_with(
+        [("t", {"i": 0}), ("t", {"i": 1}), ("t", {"i": 2})]
+    )
+
+
+@patch("oumi.core.synthesis.tool_router.build_environment")
+@patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
+def test_dispatch_tool_calls_handles_malformed_arguments(
     mock_build_inference_engine,
     mock_build_environment,
     mock_general_synthesis_params,
@@ -1806,16 +1854,17 @@ def test_run_tool_call_handles_malformed_arguments(
         id="call_x",
         function=FunctionCall(name="t", arguments="{not valid json"),
     )
-    msg = synth._run_tool_call(tc)
+    synth._prepare_sample_routers(1)
+    [msg] = synth._dispatch_tool_calls([tc], 0)
     assert msg.role == Role.TOOL
     assert msg.tool_call_id == "call_x"
-    assert "Malformed tool_call arguments" in str(msg.content)
+    assert "arguments are not valid JSON" in str(msg.content)
     fake_env.step.assert_not_called()
 
 
-@patch("oumi.core.synthesis.conversation_synthesizer.build_environment")
+@patch("oumi.core.synthesis.tool_router.build_environment")
 @patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
-def test_run_tool_call_handles_non_dict_arguments(
+def test_dispatch_tool_calls_handles_non_dict_arguments(
     mock_build_inference_engine,
     mock_build_environment,
     mock_general_synthesis_params,
@@ -1841,16 +1890,17 @@ def test_run_tool_call_handles_non_dict_arguments(
     )
 
     tc = ToolCall(id="c", function=FunctionCall(name="t", arguments="[1, 2, 3]"))
-    msg = synth._run_tool_call(tc)
+    synth._prepare_sample_routers(1)
+    [msg] = synth._dispatch_tool_calls([tc], 0)
     assert msg.role == Role.TOOL
     assert msg.tool_call_id == "c"
     assert "must be a JSON object" in str(msg.content)
     fake_env.step.assert_not_called()
 
 
-@patch("oumi.core.synthesis.conversation_synthesizer.build_environment")
+@patch("oumi.core.synthesis.tool_router.build_environment")
 @patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
-def test_run_tool_call_handles_unknown_tool(
+def test_dispatch_tool_calls_handles_unknown_tool(
     mock_build_inference_engine,
     mock_build_environment,
     mock_general_synthesis_params,
@@ -1877,20 +1927,21 @@ def test_run_tool_call_handles_unknown_tool(
         id="c",
         function=FunctionCall(name="ghost_tool", arguments="{}"),
     )
-    msg = synth._run_tool_call(tc)
+    synth._prepare_sample_routers(1)
+    [msg] = synth._dispatch_tool_calls([tc], 0)
     assert msg.role == Role.TOOL
     assert "Unknown tool 'ghost_tool'" in str(msg.content)
     fake_env.step.assert_not_called()
 
 
-@patch("oumi.core.synthesis.conversation_synthesizer.build_environment")
+@patch("oumi.core.synthesis.tool_router.build_environment")
 @patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
-def test_run_tool_call_handles_env_exception(
+def test_dispatch_tool_calls_handles_env_exception_with_per_call_fallback(
     mock_build_inference_engine,
     mock_build_environment,
     mock_general_synthesis_params,
 ):
-    """env.step() raising → error TOOL message, loop stays alive."""
+    """Batched step() raising → fall back to per-call dispatch for attribution."""
     mock_build_inference_engine.return_value = Mock()
     fake_env = Mock(spec=BaseEnvironment)
     fake_env.step.side_effect = RuntimeError("boom")
@@ -1910,12 +1961,13 @@ def test_run_tool_call_handles_env_exception(
     )
 
     tc = ToolCall(id="c", function=FunctionCall(name="t", arguments="{}"))
-    msg = synth._run_tool_call(tc)
+    synth._prepare_sample_routers(1)
+    [msg] = synth._dispatch_tool_calls([tc], 0)
     assert msg.role == Role.TOOL
     assert "Tool 't' raised: boom" in str(msg.content)
 
 
-@patch("oumi.core.synthesis.conversation_synthesizer.build_environment")
+@patch("oumi.core.synthesis.tool_router.build_environment")
 @patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
 def test_assistant_turn_loops_on_tool_calls(
     mock_build_inference_engine,
@@ -1924,7 +1976,9 @@ def test_assistant_turn_loops_on_tool_calls(
 ):
     """Assistant turn loops: tool_calls -> dispatch -> re-infer -> final text."""
     fake_env = Mock(spec=BaseEnvironment)
-    fake_env.step.return_value = ToolResult(output={"answer": 42})
+    fake_env.step.side_effect = lambda calls: [
+        ToolResult(output={"answer": 42}) for _ in calls
+    ]
     mock_build_environment.return_value = fake_env
 
     turn_call_count = {"n": 0}
@@ -2023,7 +2077,7 @@ def test_assistant_turn_loops_on_tool_calls(
     assert fake_env.step.call_count == 1
 
 
-@patch("oumi.core.synthesis.conversation_synthesizer.build_environment")
+@patch("oumi.core.synthesis.tool_router.build_environment")
 @patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
 def test_assistant_turn_caps_at_max_consecutive_tool_turns_then_finalizes(
     mock_build_inference_engine,
@@ -2032,7 +2086,7 @@ def test_assistant_turn_caps_at_max_consecutive_tool_turns_then_finalizes(
 ):
     """When max_consecutive_tool_turns is hit, the nudge forces a final text answer."""
     fake_env = Mock(spec=BaseEnvironment)
-    fake_env.step.return_value = ToolResult(output="ok")
+    fake_env.step.side_effect = lambda calls: [ToolResult(output="ok") for _ in calls]
     mock_build_environment.return_value = fake_env
 
     def scripted_infer(prompts, inference_config=None):
@@ -2128,16 +2182,18 @@ def test_assistant_turn_caps_at_max_consecutive_tool_turns_then_finalizes(
     assert fake_env.step.call_count == 2
 
 
-@patch("oumi.core.synthesis.conversation_synthesizer.build_environment")
+@patch("oumi.core.synthesis.tool_router.build_environment")
 @patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
 def test_assistant_turn_dispatches_parallel_batch_unrestricted(
     mock_build_inference_engine,
     mock_build_environment,
     mock_general_synthesis_params,
 ):
-    """A parallel tool_calls batch dispatches in full; cap is on rounds, not calls."""
+    """A parallel tool_calls batch is folded into one step() invocation."""
     fake_env = Mock(spec=BaseEnvironment)
-    fake_env.step.return_value = ToolResult(output={"ok": True})
+    fake_env.step.side_effect = lambda calls: [
+        ToolResult(output={"ok": True}) for _ in calls
+    ]
     mock_build_environment.return_value = fake_env
 
     assistant_turn_count = {"n": 0}
@@ -2220,4 +2276,340 @@ def test_assistant_turn_dispatches_parallel_batch_unrestricted(
             multiturn_attributes=multiturn_attr,
         )
 
-    assert fake_env.step.call_count == 5
+    # 5 parallel tool calls fold into a single batched step() invocation.
+    assert fake_env.step.call_count == 1
+    [call] = fake_env.step.call_args_list
+    assert len(call.args[0]) == 5
+
+
+@patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
+def test_synthesizer_attaches_inference_to_synthetic_env(
+    mock_build_inference_engine,
+    mock_general_synthesis_params,
+):
+    """SyntheticEnvironments built via _tool_dispatch get attach_inference()."""
+    from oumi.environments.synthetic_environment import SyntheticEnvironment
+
+    mock_engine = Mock()
+    mock_build_inference_engine.return_value = mock_engine
+
+    env_params = EnvironmentParams(
+        id="docs",
+        name="Docs",
+        description="Synthetic docs env",
+        env_type="synthetic",
+        tools=[
+            ToolParams(
+                id="lookup",
+                name="Lookup",
+                description="Look up docs.",
+                parameters={
+                    "type": "object",
+                    "properties": {"q": {"type": "string"}},
+                    "required": ["q"],
+                },
+            )
+        ],
+        env_kwargs={"system_prompt": "Simulate the lookup tool."},
+    )
+    env_config = EnvironmentConfig(environments=[env_params])
+
+    inference_config = InferenceConfig(
+        engine=InferenceEngineType.OPENAI,
+        model=Mock(spec=ModelParams),
+        remote_params=Mock(spec=RemoteParams),
+        generation=GenerationParams(),
+    )
+    synth = ConversationSynthesizer(
+        mock_general_synthesis_params,
+        inference_config,
+        environment_config=env_config,
+    )
+
+    assert synth._router is not None
+    env = synth._router.tool_to_env["lookup"]
+    assert isinstance(env, SyntheticEnvironment)
+    assert env._engine is mock_engine
+    assert env._base_inference_config is inference_config
+
+
+# ---------- per-sample router isolation ----------
+
+
+def test_prepare_sample_routers_builds_one_router_per_sample(
+    mock_inference_config,
+):
+    """_prepare_sample_routers materializes a router clone per sample.
+
+    The deterministic env carries no mutable state so it is shared across
+    routers; only the router wrappers themselves are per-sample.
+    """
+    env_config = _grounded_env_config(n_entries=5, sample_size=2, seed=1)
+    synth = _make_synthesizer(mock_inference_config, environment_config=env_config)
+    synth._prepare_sample_routers(3)
+    assert len(synth._sample_routers) == 3
+    routers = synth._sample_routers
+    assert routers[0] is not None and routers[1] is not None and routers[2] is not None
+    assert routers[0] is not routers[1]
+    assert routers[1] is not routers[2]
+    envs_0 = routers[0].env_by_id["env1"]
+    envs_1 = routers[1].env_by_id["env1"]
+    envs_2 = routers[2].env_by_id["env1"]
+    assert envs_0 is envs_1 is envs_2
+
+
+def test_prepare_sample_routers_without_env_config_yields_none_slots(
+    mock_inference_config,
+):
+    """Synthesizers without an env config still get a per-sample slot list."""
+    synth = _make_synthesizer(mock_inference_config)
+    synth._prepare_sample_routers(2)
+    assert synth._sample_routers == [None, None]
+
+
+@patch("oumi.core.synthesis.tool_router.build_environment")
+@patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
+def test_dispatch_tool_calls_uses_distinct_envs_across_samples(
+    mock_build_inference_engine,
+    mock_build_environment,
+    mock_general_synthesis_params,
+):
+    """Two samples' dispatches land on different env instances."""
+    mock_build_inference_engine.return_value = Mock()
+
+    built_envs: list[Mock] = []
+
+    def _fresh_env(_params):
+        env = Mock(spec=BaseEnvironment)
+        env.step.return_value = [ToolResult(output={"ok": True})]
+        built_envs.append(env)
+        return env
+
+    mock_build_environment.side_effect = _fresh_env
+
+    env_config = _make_env_config("e", "t")
+    inference_config = InferenceConfig(
+        engine=InferenceEngineType.OPENAI,
+        model=Mock(spec=ModelParams),
+        remote_params=Mock(spec=RemoteParams),
+        generation=GenerationParams(),
+    )
+    synth = ConversationSynthesizer(
+        mock_general_synthesis_params,
+        inference_config,
+        environment_config=env_config,
+    )
+    synth._prepare_sample_routers(2)
+
+    tc = ToolCall(id="c", function=FunctionCall(name="t", arguments="{}"))
+    synth._dispatch_tool_calls([tc], 0)
+    synth._dispatch_tool_calls([tc], 1)
+
+    # __init__ builds the parent env; _prepare_sample_routers(2) builds 2 more.
+    assert len(built_envs) == 3
+    env_sample_0, env_sample_1 = built_envs[1], built_envs[2]
+    assert env_sample_0 is not env_sample_1
+    assert env_sample_0.step.call_count == 1
+    assert env_sample_1.step.call_count == 1
+
+
+@patch("oumi.core.synthesis.tool_router.build_environment")
+@patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
+def test_synthesize_clears_sample_routers_on_normal_exit(
+    mock_build_inference_engine,
+    mock_build_environment,
+    mock_general_synthesis_params,
+    mock_multiturn_attribute,
+):
+    """sample_routers is reset to [] after a successful synthesize() call."""
+    mock_engine = Mock()
+    mock_engine.infer.return_value = []
+    mock_build_inference_engine.return_value = mock_engine
+    mock_build_environment.return_value = Mock(spec=BaseEnvironment)
+
+    env_config = _make_env_config("e", "t")
+    inference_config = InferenceConfig(
+        engine=InferenceEngineType.OPENAI,
+        model=Mock(spec=ModelParams),
+        remote_params=Mock(spec=RemoteParams),
+        generation=GenerationParams(),
+    )
+    synth = ConversationSynthesizer(
+        mock_general_synthesis_params,
+        inference_config,
+        environment_config=env_config,
+    )
+
+    with (
+        patch.object(synth, "_plan_samples", side_effect=lambda samples, _: samples),
+        patch.object(synth, "_synthesize_all_samples", return_value=[]),
+    ):
+        synth.synthesize([{"x": 1}], mock_multiturn_attribute)
+    assert synth._sample_routers == []
+
+
+@patch("oumi.core.synthesis.tool_router.build_environment")
+@patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
+def test_synthesize_clears_sample_routers_on_exception(
+    mock_build_inference_engine,
+    mock_build_environment,
+    mock_general_synthesis_params,
+    mock_multiturn_attribute,
+):
+    """sample_routers is reset to [] even if a downstream stage raises."""
+    mock_build_inference_engine.return_value = Mock()
+    mock_build_environment.return_value = Mock(spec=BaseEnvironment)
+
+    env_config = _make_env_config("e", "t")
+    inference_config = InferenceConfig(
+        engine=InferenceEngineType.OPENAI,
+        model=Mock(spec=ModelParams),
+        remote_params=Mock(spec=RemoteParams),
+        generation=GenerationParams(),
+    )
+    synth = ConversationSynthesizer(
+        mock_general_synthesis_params,
+        inference_config,
+        environment_config=env_config,
+    )
+
+    with patch.object(synth, "_plan_samples", side_effect=RuntimeError("plan boom")):
+        with pytest.raises(RuntimeError, match="plan boom"):
+            synth.synthesize([{"x": 1}], mock_multiturn_attribute)
+    assert synth._sample_routers == []
+
+
+# ---------------------------------------------------------------------------
+# Token usage accounting
+# ---------------------------------------------------------------------------
+
+
+@patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
+def test_token_usage_accumulates_from_inference_metadata(
+    mock_build_inference_engine,
+    mock_general_synthesis_params,
+    mock_multiturn_attribute,
+    mock_inference_config,
+):
+    """Token counts accumulate from inference response usage metadata.
+
+    Mirrors AttributeSynthesizer's token accounting: every infer() result
+    carries usage metadata, and the synthesizer must sum it across the
+    planner and per-turn calls so downstream consumers can bill multi-turn
+    conversations.
+    """
+    mock_engine = Mock()
+    mock_build_inference_engine.return_value = mock_engine
+
+    def infer_side_effect(conversations, **kwargs):
+        return [
+            Conversation(
+                messages=[Message(role=Role.ASSISTANT, content="Response")],
+                metadata={
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 4,
+                        "cached_tokens": 1,
+                    }
+                },
+            )
+            for _ in conversations
+        ]
+
+    mock_engine.infer.side_effect = infer_side_effect
+
+    synth = ConversationSynthesizer(
+        mock_general_synthesis_params,
+        mock_inference_config,
+    )
+
+    assert synth.total_input_tokens == 0
+    assert synth.total_output_tokens == 0
+    assert synth.total_cached_tokens == 0
+
+    synth.synthesize(
+        [{"customer_type": "frustrated", "issue": "billing"}],
+        mock_multiturn_attribute,
+    )
+
+    # Assert exact totals, not just ratios. With a single sample every infer()
+    # returns exactly one result, and each accumulate site adds the same usage,
+    # so the totals must equal the number of infer() calls times the per-call
+    # usage. A ratio-only check is scale-invariant — it would still pass if some
+    # accumulate sites were deleted (totals shrink but ratios hold); tying the
+    # totals to infer.call_count catches a missing site.
+    calls = mock_engine.infer.call_count
+    assert calls > 0
+    assert synth.total_input_tokens == calls * 10
+    assert synth.total_output_tokens == calls * 4
+    assert synth.total_cached_tokens == calls * 1
+
+
+@patch("oumi.core.synthesis.conversation_synthesizer.build_inference_engine")
+def test_token_usage_accumulates_in_straggler_finalization(
+    mock_build_inference_engine,
+    mock_general_synthesis_params,
+    mock_inference_config,
+):
+    """Straggler-finalization inference is also counted.
+
+    With ``max_consecutive_tool_turns=0`` the assistant agentic loop never runs
+    a tool round, so the assistant turn is forced down the
+    ``_finalize_stragglers`` path — the fourth accumulate site, which the
+    happy-path test above does not reach (no stragglers there). The exact-total
+    check fails if that site does not accumulate.
+    """
+    mock_engine = Mock()
+    mock_build_inference_engine.return_value = mock_engine
+
+    def infer_side_effect(conversations, **kwargs):
+        return [
+            Conversation(
+                messages=[Message(role=Role.ASSISTANT, content="Response")],
+                metadata={
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 4,
+                        "cached_tokens": 1,
+                    }
+                },
+            )
+            for _ in conversations
+        ]
+
+    mock_engine.infer.side_effect = infer_side_effect
+
+    # min == max == 2 makes the turn order deterministic (USER then ASSISTANT);
+    # max_consecutive_tool_turns=0 routes the ASSISTANT turn through
+    # _finalize_stragglers instead of a tool round.
+    multiturn_attr = MultiTurnAttribute(
+        id="straggler_conversation",
+        min_turns=2,
+        max_turns=2,
+        role_instruction_messages={
+            Role.USER: "You are a user.",
+            Role.ASSISTANT: "You are an assistant.",
+        },
+        max_consecutive_tool_turns=0,
+    )
+
+    synth = ConversationSynthesizer(
+        mock_general_synthesis_params,
+        mock_inference_config,
+    )
+
+    result = synth.synthesize([{}], multiturn_attr)
+
+    # The straggler turn produced a (non-filtered) assistant message...
+    record = result[0]
+    assert record is not None
+    conversation = record[multiturn_attr.id]
+    assert isinstance(conversation, dict)
+    roles = [message["role"] for message in conversation["messages"]]
+    assert "assistant" in roles
+    # ...and its inference tokens were counted along with every other call.
+    calls = mock_engine.infer.call_count
+    assert calls > 0
+    assert synth.total_input_tokens == calls * 10
+    assert synth.total_output_tokens == calls * 4
+    assert synth.total_cached_tokens == calls * 1
